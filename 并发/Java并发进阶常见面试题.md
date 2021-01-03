@@ -574,6 +574,7 @@ System.out.println("关门");
 ### 6.2 CyclicBarrier
 
 ```java
+//减法计数器
 CyclicBarrier cyclicBarrier = new CyclicBarrier(7,()->{
     System.out.println("召唤神龙成功！");
 });
@@ -614,20 +615,186 @@ for (int i = 1; i <= 7; i++) {
         }
 ```
 
+## 7.读写锁（ReadWriteLock）
 
+等同于 独占锁（读锁）
+共享锁（写锁）
+读-读 可以共存
+读-写 不能共存
+写-写 不能共存
 
+```java
+private volatile Map<String,Object> map = new HashMap<>();
+private ReadWriteLock readWriteLock = new ReentrantReadWriteLock();
+//存
+public void put(String key,Object value){
+    readWriteLock.writeLock().lock();
+    try {
+        System.out.println(Thread.currentThread().getName()+"写入"+ key);
+        map.put(key,value);
+        System.out.println(Thread.currentThread().getName()+"写入OK");
+    } catch (Exception e) {
+        e.printStackTrace();
+    } finally {
+        readWriteLock.writeLock().unlock();
+    }
+}
 
+//取
+public void get(String key){
+    readWriteLock.readLock().lock();
+    try {
+        System.out.println(Thread.currentThread().getName()+"读取"+ key);
+        Object o = map.get(key);
+        System.out.println(Thread.currentThread().getName()+"读取OK");
+    } catch (Exception e) {
+        e.printStackTrace();
+    } finally {
+        readWriteLock.readLock().unlock();
+    }
+}
+```
 
-
-
-
-
-
-
-## 7.函数型接口和段定型接口（重点，4大）
+## 8.函数型接口和段定型接口（重点，4大）
 
 lambda表达式，链式编程，函数式接口，Stream流式计算
 
 > 函数式接口：只有一个方法的接口
 
-### 5.1
+简化编程模型，在新版本的框架中大量运用 
+
+### 四大函数式接口
+
+#### Function 函数式接口
+
+```java
+//底层
+public interface Function<T, R> {
+    R apply(T var1);
+}
+//实现
+Function function = new Function<String,String>(){
+    @Override
+    public String apply(String o) {
+        return o;
+    }
+};
+Function function1 = (str)->{return str;};
+System.out.println(function.apply("aaa"));
+System.out.println(function1.apply(1));
+```
+
+#### Predicate 断定型接口
+
+有一个输入参数，返回值只能是布尔值
+
+```java
+//底层
+public interface Predicate<T> {
+    boolean test(T var1);
+}
+//实现
+Predicate predicate = new Predicate<String>() {
+    @Override
+    public boolean test(String o) {
+        return o.isEmpty();
+    }
+};
+Predicate<String> predicate1 = (str)->{return str.isEmpty();};
+System.out.println(predicate.test("aaa"));
+```
+
+#### Consumer 消费型接口
+
+只有输入，没有返回值
+
+```java
+//底层
+public interface Consumer<T> {
+    void accept(T var1);
+}
+//实现
+Consumer consumer = new Consumer<String>() {
+    @Override
+    public void accept(String o) {
+        System.out.println(o);
+    }
+};
+Consumer<String> consumer1 = (str)->{
+    System.out.println(str);
+};
+consumer.accept("aaaa");
+consumer1.accept("bbbb");
+```
+
+#### Supplier 供给型接口
+
+```java
+//只有返回值，没有参数
+Supplier supplier = new Supplier<String>() {
+    @Override
+    public String get() {
+        return "aaa";
+    }
+};
+Supplier<String> supplier1 = ()->{return "bbb";};
+System.out.println(supplier.get());
+System.out.println(supplier1.get());
+```
+
+### Stream流式计算
+
+```java
+User user1 = new User(1,"a",21);
+User user2 = new User(2,"b",28);
+User user3 = new User(3,"c",23);
+User user4 = new User(4,"d",22);
+User user5 = new User(6,"e",27);
+List<User> users = Arrays.asList(user1,user2,user3,user4,user5);
+
+users.stream()
+    .filter(u->u.getId()%2==0)
+    .filter(u->u.getAge()>23)
+    .map(u->{u.getName().toUpperCase();return u;})
+    .sorted((uu1,uu2)->uu2.getName().compareTo(uu1.getName()))
+    .limit(1)
+    .forEach(System.out::println);
+```
+
+##  9.ForkJoin
+
+> 什么是ForkJoin?
+
+ForkJoin 在JDK1.7 ，并行执行任务，提高效率，大数据量
+**特点：工作窃取，维护的是双端队列**
+
+> ForkJoin的操作
+
+## 10.异步回调
+
+> Future 设计的初衷，对未来的某个事件的结果进行建模
+
+## 11.JMM
+
+### 1.什么是JMM
+
+JMM:java内存模型，不存在的东西，是一种概念，约定
+
+关于JMM的一些同步的约定：
+
+1.线程解锁前，必须把共享变量**立刻**刷回主存
+2.线程加锁前，必须读取主存中最新的值到工作内存中
+3.加锁和解锁必须是同一把锁
+
+
+
+
+
+
+
+
+
+
+
+
+
