@@ -45,6 +45,13 @@ position(int index);将position指针指向index
   Channel extends Closeable{}
 - 常用的Channel类有:FileChannel,DaagramChannel,ServerSocketChannel和SocketChannel..ServerSocketChannel和ServerSocket类似,SocketChannel和Socket类似
 
+### 3.关于Buffer和Channel的注意事项和细节
+
+1. ByteBuffer 支持类型化的put和get,put放入的是什么数据类型,get就应该使用相应的数据类型来取出,否则可能会抛出异常
+2. 可以将一个普通的Buffer 转成只读 Buffer
+3. NIO还提供了MappedByteBuffer,可以让文件直接在内存中进行修改,而如何同步到文件由NIO来完成
+4. NIO还支持通过多个Buffer(即Buffer数组)完成读写操作,即Scattering和Gathering
+
 > MappedByteBuffer使用
 
 ```java
@@ -66,3 +73,216 @@ randomAccessFile.close();
 System.out.println("修改成功");
 ```
 
+> Buffer的分散和聚集
+
+```java
+/**
+         * Scattering: 将数据写入到Buffer中时,可以采用Buffer数组,以此写入[分散]
+         * Gatering: 从Buffer中读取数据时,可以采用buffer数组,以此读
+         */
+
+//使用ServerSocketChannel 和 SocketChannel 网络
+ServerSocketChannel serverSocketChannel = ServerSocketChannel.open();
+InetSocketAddress inetSocketAddress = new InetSocketAddress(7000);
+
+//绑定端口到socket,并启动
+serverSocketChannel.socket().bind(inetSocketAddress);
+
+//创建一个buffer数组(服务器端)
+ByteBuffer[] byteBuffers = new ByteBuffer[2];
+byteBuffers[0] = ByteBuffer.allocate(5);
+byteBuffers[1] = ByteBuffer.allocate(3);
+
+//等待客户端连接(telnet)
+SocketChannel socketChannel = serverSocketChannel.accept();
+int messageLength = 8;//假定从客户端接收8个字节
+
+//循环的读取
+while (true){
+    int byteRead = 0;
+    while (byteRead < messageLength) {
+        long l = socketChannel.read(byteBuffers);
+        byteRead += l;//累计读取的字节数
+        System.out.println(byteRead);
+        //使用流打印,看看当前的buffer的position 和limit
+        Arrays.asList(byteBuffers).stream()
+            .map(buffer -> "position=" + buffer.position() + " limit=" + buffer.limit())
+            .forEach(System.out::println);
+    }
+
+    //将所有的buffer进行flip,开始写操作
+    Arrays.asList(byteBuffers).forEach(buffer->buffer.flip());
+
+    //将数据独处显示到客户端
+    long byteWirte = 0;
+    while (byteWirte<messageLength){
+        long l = socketChannel.write(byteBuffers);//
+        byteWirte+=l;
+    }
+
+    //将所有的buffer 进行clear
+    Arrays.asList(byteBuffers).forEach(buffer->{buffer.clear();});
+    System.out.println("byteRead:="+byteRead+" byteWrite="+byteWirte+" messageLength="+ messageLength);
+```
+
+### 4.Selector
+
+> 基本介绍
+
+1. Java的NIO,用非阻塞的IO方式.可以用一个线程,处理多个的客户端连接,就会使用到Selector
+2. Selector能够监测多个注册的通道上是否有事件发生(**注意:多个Channel以事件的方式可以注册到同一个Selector**).如果有事件发生,便获取事件,然后针对每个事件进行相应的处理.这样就可以只用一个单线程去管理多个通道,也就是管理多个连接和请求
+3. 只有在连接真正有读写时间发生时,才会进行读写,就打打地减少了系统开销,并且不必为每个连接都创建一个线程,不用去维护多个线程
+4. 避免了多线程之间的上下文切换导致的开销
+
+> Selector类的相关方法
+
+Selector是一个抽象类:
+
+public static Selector open();//得到一个选择器对象
+public int select(long timeout);//监控所有注册的通道,当其中有IO操作可以进行时,将对应的SelectionKey加入到内部集合中并返回,参数用来设置超时时间
+public Set<SelectionKey> selectedKeys();//从内部集合中得到所有的SelectionKey
+
+> 网络编程原理分析
+
+1. 当客户端连接时,会通过ServerSocketCHannel得到SocketChannel
+2. 将socketChannel注册到Selector上,register(Selector sel,int ops),一个selector上可以注册多个SocketChannel
+3. 注册后返回一个SelectionKey,回合该Selector关联(集合)
+4. Selector进行监听select方法,返回有事件发生的通道的个数
+
+### 5.NIO入门程序
+
+> 服务端
+
+```java
+package NIO;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.*;
+import java.util.Iterator;
+import java.util.Set;
+
+/**
+ * @author gzy
+ * @create 2021-02-05-10:09
+ */
+public class NIOServer {
+    public static void main(String[] args) throws IOException {
+        //创建ServerSocketChannel 等价于  ServerSocket
+        ServerSocketChannel serverSocketChannel = ServerSocketChannel.open();
+
+        //得到一个Selector对象
+        Selector selector = Selector.open();
+
+        //绑定一个端口6666,在服务器端监听
+        serverSocketChannel.socket().bind(new InetSocketAddress(6666));
+        //设置为非阻塞75
+        serverSocketChannel.configureBlocking(false);
+
+        //把serverSocketChannel 注册到  selector 关心 事件为  OP_ACCEPT
+        serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+
+        //循环等待客户端连接
+        while(true){
+
+            //这里等待1秒,如果没有事件发生(连接事件),返回
+            if(selector.select(1000)==0){//没有事件发生
+                System.out.println("服务器等待了1秒,无连接");
+                continue;
+            }
+
+            //如果返回的>0 ,就获取到相关的selectionKey集合
+            //1.如果返回的>0 ,表示已经获取到关注的事件
+            //2.selector.selectedKeys() 返回关注事件的集合
+            //通过 selectionKeys 可以反向获取通道
+            Set<SelectionKey> selectionKeys = selector.selectedKeys();
+
+            //遍历 Set<SelectionKey>,使用迭代器遍历
+            Iterator<SelectionKey> keyIterator = selectionKeys.iterator();
+            while (keyIterator.hasNext()){
+
+                //获取到 selectionKey
+                SelectionKey key = keyIterator.next();
+
+                //根据key 对应的通道发生的事件做相应处理
+                if (key.isAcceptable()){
+
+                    //如果是 OP_ACCEPT,有新的客户端连接
+                    //给该客户端生成一个SocketChannel,等待
+                    SocketChannel socketChannel = serverSocketChannel.accept();
+                    System.out.println("客户端连接成功,生成了一个socketChannel::"+socketChannel.hashCode());
+
+                    //将socketChannel设置为非阻塞
+                    socketChannel.configureBlocking(false);
+
+                    //将socketChannel 注册到 selector,关注事件为 OP_READ ,同时给该socketChannel 关联一个Buffer
+                    socketChannel.register(selector, SelectionKey.OP_READ, ByteBuffer.allocate(1024));
+                }
+                if (key.isReadable()){
+
+                    //如果是OP_READ,表示可读
+                    //通过key,反向获取到对应channel
+                    SocketChannel channel = (SocketChannel)key.channel();
+
+                    //获取到该channel关联的buffer
+                    ByteBuffer buffer = (ByteBuffer)key.attachment();
+                    channel.read(buffer);
+                    System.out.println("form客户端"+new String(buffer.array()));
+                }
+
+                //手动从集合中移动当前的SelectionKey,防止重复操作
+                keyIterator.remove();
+            }
+        }
+    }
+}
+
+```
+
+> 客户端
+
+```java
+package NIO;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.SocketChannel;
+import java.nio.charset.StandardCharsets;
+
+/**
+ * @author gzy
+ * @create 2021-02-06-9:47
+ */
+public class NIOClient {
+    public static void main(String[] args) throws IOException {
+        //得到一个网络通道
+        SocketChannel socketChannel = SocketChannel.open();
+
+        //设置非阻塞
+        socketChannel.configureBlocking(false);
+        //提供服务器端的ip和端口
+        InetSocketAddress inetSocketAddress = new InetSocketAddress("127.0.0.1", 6666);
+
+        //连接服务器
+        if (socketChannel.connect(inetSocketAddress)){
+            //如果连接成功,可以发送数据
+            String str="hello";
+            //wrap方法产生一个字节数组到buffer
+            ByteBuffer buffer = ByteBuffer.wrap(str.getBytes(StandardCharsets.UTF_8));
+            //发送数据,将buffer数据写入到channel
+            socketChannel.write(buffer);
+            System.in.read();
+        }else{
+            //如果连接不成功
+            while (!socketChannel.finishConnect()){
+                System.out.println("因为连接需要时间,客户端不会阻塞,可以做其他工作");
+            }
+        }
+    }
+}
+
+```
+
+### 6.NIO群聊系统
