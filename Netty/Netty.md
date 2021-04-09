@@ -322,3 +322,40 @@ public class NIOClient {
 > 2. 服务器端程序处理传入的多个请求,并将它们同步分派到相应的处理线程,因此Reactor模式也叫Dispatcher模式
 > 3. Reactor模式使用IO复用监听事件,收到事件后,分发给某个线程(进程),这点就是网络服务高并发处理关键
 
+### 主从Reactor多线程
+
+针对单Reactor多线程模型中,Reactor在单线程中运行,高并发场景下容易成为性能瓶颈,可以让Reactor在多线程运行
+
+> 方案说明
+
+1. Reactor主线程MainReactor对象通过Select监听连接事件,收到事件后,通过Accptor处理连接事件
+2. 当Acceptor处理连接事件后,MainReactor将连接分配给SubReactor
+3. SubReactor将连接加入到连接队列进行监听,并创建handler进行各种事件处理
+4. 当有新事件发生时,subreactor就会调用对应的handler处理
+5. handler通过read读取数据,分发给后面的worker线程处理
+6. worker线程池分配队里worker线程进行业务处理,并返回结果
+7. handler收到相应的结果后,再通过send将结果返回给client
+8. Reactor主线程可以对应多个Reactor子线程,即MainReactor可以关联多个SubReactor
+
+### netty模型
+
+1. BossGroup线程维护Selector,只关注Accecpt
+2. 当接收到Accept时间,获取到对应的SocketChannel,封装成NIOSocketChannel并注册到Worker线程(事件循环),并进行维护
+3. 当Worker线程坚挺到selector中通道发生自己感兴趣的事件后,就进行处理(就由handler),注意:handler已经加入到通道中
+
+> 工作原理
+
+1. Netty抽象出两组线程池BossGroup专门负责接收客户端的连接,WorkerGroup专门负责网络的读写
+2. BossGroup和WorkerGroup类型都是NioEventLoopGroup
+3. NioEventLoop相当于一个事件循环组,这个组中含有多个事件循环,每一个事件循环是NioEventLoop
+4. NioEventLoop表示一个不断循环的执行处理任务的线程,每个NioEventLoop都有一个selector,用于监听绑定在其上的socket的网络通讯
+5. NioEventLoopGroup可以有多个线程,即可以含有多个NioEventLoop
+6. 每个Boss NioEventLoop 循环执行的步骤有三步
+   - 轮询accept时间
+   - 处理accept时间,与client建立连接,生成NioSocketChannel,并将其注册到某个worker NIOEventLoop上的selector
+   - 处理任务队列的任务,即runAllTasks
+7. 每个Worker NIOEventLoop循环执行的步骤
+   - 轮询read,write时间
+   - 处理IO时间,即read,write时间,在对应NIOSocketChannel处理
+   - 处理任务队列的任务,即runAllTasks
+8. 每个Worker NIOEventLoop处理业务是,会使用pipeline(管道),管道中包含了channel,即通过pipeline可以获取到对应通道,管道中维护了很多的处理器(处理数据)
